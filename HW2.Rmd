@@ -1,0 +1,648 @@
+---
+title: "Econ 187 HW2"
+author: "Yiting Zhang"
+date: '2022-04-28'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list=ls())
+library(glmnet)  # for ridge regression
+library(dplyr)   # for data cleaning
+library(psych)   # for function tr() to compute trace of a matrix
+library(caret)
+library(ISLR)
+library(ggplot2)
+library(pls)
+library(MASS)
+library(gam)
+library(data.table)
+
+```
+
+# Problem 6.9a
+
+9.  In this exercise, we will predict the number of applications received using the other variables in the College data set.
+
+(a) Split the data set into a training set and a test set.
+
+```{r}
+
+data(College)
+
+set.seed(12345678)
+train <- sample(1:dim(College)[1], dim(College)[1]*.75, rep=FALSE)
+test <- -train
+c.training<- College[train, ]
+c.testing= College[test, ]
+
+```
+
+(b) Fit a linear model using least squares on the training set, and report the test error obtained.
+
+```{r}
+
+# numeric data
+c.training.scaled <- c.training %>% mutate_if(is.numeric,function(x) ifelse(is.na(x),median(x,na.rm=T),x)) %>% mutate_if(is.numeric, function(x) scale(x))
+
+c.testing.scaled <- c.testing %>% mutate_if(is.numeric,function(x) ifelse(is.na(x),median(x,na.rm=T),x)) %>% mutate_if(is.numeric, function(x) scale(x))
+
+# categorical data
+# (1) impute with mode
+c.training.scaled <- c.training.scaled %>% mutate_if(is.character,function(x) ifelse(is.na(x),mode(x),x))
+c.testing.scaled <- c.testing.scaled %>% mutate_if(is.character,function(x) ifelse(is.na(x),mode(x),x))
+
+# (2) encode data
+c.training.scaled <- c.training.scaled %>% mutate_if(is.character,function(x) as.integer(factor(x)))
+c.testing.scaled <- c.testing.scaled %>% mutate_if(is.character,function(x) as.integer(factor(x)))
+```
+
+```{r}
+
+lm.fit = lm(Apps~., data=c.training.scaled)
+lm.pred = predict(lm.fit, c.testing.scaled, type="response")
+lm_MSE <- mean((lm.pred - c.testing.scaled$Apps)^2); lm_MSE
+
+```
+
+The OLS MSE is 0.0417.
+
+(c) Fit a ridge regression model on the training set, with lambda chosen by cross-validation. Report the test error obtained.
+
+
+```{r}
+
+model_ridge = cv.glmnet(x = data.matrix(c.training.scaled[,-which(names(c.training) %in% c("Apps"))]), 
+y=c.training.scaled$Apps, alpha = 0)
+
+plot(model_ridge$glmnet.fit, "lambda", label=TRUE)
+plot(model_ridge$glmnet.fit,xvar="dev",label=TRUE)
+
+```
+
+```{r}
+library(vip)
+vip(model_ridge, num_features = 30, geom = "point")
+```
+
+This shows that the Private variable is the most important one by far, followed by whether the college is top 10 percent or not. This makes sense because the top 10 colleges are all private and private colleges tend to have a better rank.
+
+```{r}
+# cross validation to train our ridge model to find the best lambda
+
+train_control <- trainControl(method = "repeatedcv",
+                              number = 5,
+                              repeats = 1,
+                              search = "random",
+                              verboseIter = FALSE)
+
+ridge_model 	<- train(Apps ~ .,
+                       data = c.training.scaled,
+                       metrics = 'RMSE',
+                       method = "ridge",
+                       tuneLength = 25,
+                       trControl = train_control)
+
+# Predict using the testing data
+ridge_pred = predict(ridge_model, newdata = c.testing.scaled)
+
+# Evaluate performance
+postResample(pred = ridge_pred, obs = c.testing.scaled[,'Apps'])
+
+ridge_MSE <- mean((ridge_pred - c.testing.scaled[, "Apps"])^2); ridge_MSE
+
+
+```
+
+The Ridge MSE is 0.04170833
+The ridge model shows the best performance to be 0.2042257 (RMSE), with an R-squared of 0.959537
+
+
+(d) Fit a lasso model on the training set, with lambda chosen by cross validation. Report the test error obtained, along with the number of non-zero coefficient estimates.
+
+```{r}
+ 
+lambda_try <- 10^seq(-2, 4, length.out = 99)
+cv_lasso = cv.glmnet(x = data.matrix(c.training.scaled[,-which(names(c.training) %in% c("Apps"))]), 
+y=c.training$Apps, alpha = 1, lambda=lambda_try,standardize = TRUE, nfolds = 10)
+
+#choose best lambda
+# Plot cross-validation results
+plot(cv_lasso)
+
+# Best cross-validated lambda
+lambda_cv <- cv_lasso$lambda.min
+
+# Fit final model
+model_lasso <- glmnet(x = data.matrix(c.training.scaled[,-which(names(c.training) %in% c("Apps"))]), y=c.training.scaled$Apps, alpha = 1, lambda = lambda_cv, standardize = TRUE)
+
+
+plot(cv_lasso$glmnet.fit, "lambda", label=TRUE)
+plot(cv_lasso$glmnet.fit,xvar="dev",label=TRUE)
+
+
+```
+
+
+```{r}
+
+vip(model_lasso, num_features = 30, geom = "point")
+
+```
+
+Lasso also shows that Accept is the most important variable.
+
+```{r}
+
+train_control <- trainControl(method = "repeatedcv",
+                              number = 5,
+                              repeats = 5,
+                              search = "random",
+                              verboseIter = FALSE)
+
+lasso_model 	<- train(Apps ~ .,
+                       data = c.training.scaled,
+                       metrics = 'RMSE',
+                       method = "glmnet",
+                       tuneGrid = expand.grid(alpha = 1, 
+                                              lambda = 1),
+                       tuneLength = 25,
+                       trControl = train_control)
+
+# Predict using the testing data
+lasso_pred = predict(lasso_model, newdata = c.testing.scaled)
+
+# Evaluate performance
+postResample(pred = na.omit(lasso_pred), obs = c.testing.scaled[,'Apps'])
+
+lasso_MSE <- mean((lasso_pred - c.testing.scaled[, "Apps"])^2); lasso_MSE
+
+```
+
+The lasso model shows the best performance as 0.9974326. The Lasso MSE is 0.9948718.
+
+(e) Fit a PCR model on the training set, with M chosen by cross validation. Report the test error obtained, along with the value of M selected by cross-validation.
+
+```{r}
+
+
+pcr.fit <- pcr(Apps ~ .,data = c.training.scaled,validation = "CV")
+
+validationplot(pcr.fit, val.type = "RMSEP",
+               legendpos='topright')
+
+validationplot(pcr.fit, val.type = "R2",
+               legendpos='topright')
+
+```
+
+From the cross validation,the lowest cross-validation error is in the range of 3 to 10 components. Therefore, we will test ncomps in [21,40] to see which principal component regression model performs best on our test set.
+
+```{r}
+
+pcr.pred<- predict(pcr.fit, c.testing.scaled, ncomp = 7)
+pred_pcr <- data.frame(pcr.pred)
+pcr_MSE <- sqrt(mean(c.testing.scaled[, "Apps"] - pred_pcr$Apps.7.comps)^2); pcr_MSE
+
+```
+
+PCR MSE is 0.001704798.
+
+(f) Fit a PLS model on the training set, with M chosen by crossvalidation. Report the test error obtained, along with the value of M selected by cross-validation.
+
+```{r}
+pls.fit <- plsr(Apps ~ ., data = c.training.scaled, scale = TRUE, validation = "CV")
+validationplot(pls.fit, val.type = "MSEP")
+```
+
+
+```{r}
+pls.pred <- predict(pls.fit, c.testing.scaled, ncomp = 5)
+pred_pls <- data.frame(pls.pred)
+pls_MSE <- mean((c.testing.scaled[, "Apps"] - pred_pls$Apps.5.comps)^2); pls_MSE
+
+```
+PLS MSE is 0.04910368.
+
+(g) Comment on the results obtained. How accurately can we predict the number of college applications received? Is there much difference among the test errors resulting from these five approaches?
+
+```{r}
+barplot(c(lm_MSE, ridge_MSE, lasso_MSE, pcr_MSE, pls_MSE), 
+        names.arg=c("OLS","Ridge", "Lasso", "PCR", "PLS"), main = "Test MSE",
+        ylab = "Test MSE")
+```
+
+OLS, Ridge,and Pls model are pretty similar in their MSE. Lasso has a significantly high MSE. PCR stands out the most with the least MSE, so PCR could be a good model.
+
+# Problem 6.11a
+
+11. We will now try to predict per capita crime rate in the Boston data
+set.
+
+(a) Try out some of the regression methods explored in this chapter,
+such as best subset selection, the lasso, ridge regression, and
+PCR. Present and discuss results for the approaches that you
+consider.
+
+```{r}
+
+data(Boston)
+
+set.seed(123)
+train <- sample(1:dim(Boston)[1], dim(Boston)[1]*.75, rep=FALSE)
+test <- -train
+b.training<- Boston[train, ]
+b.testing= Boston[test, ]
+
+```
+
+```{r}
+sum(is.na(Boston$crim))
+
+library(leaps)
+# best subset selection by identifying the best model that contains a given number of predictors
+regfit.full <- regsubsets(crim ~ ., Boston)
+summary(regfit.full)
+```
+```{r}
+regfit.full <- regsubsets(crim ~ ., data = Boston,
+    nvmax = 13)
+reg.summary <- summary(regfit.full)
+names(reg.summary)
+
+reg.summary$rsq
+
+```
+
+As we can see from the $R^2$, it increases from 39% when its only one variable to 45% when its all variables.
+
+```{r}
+#Decide which model to select
+par(mfrow=c(2,2))
+plot(reg.summary$rss,xlab="Number of Variables",ylab="RSS",type="l")
+
+plot(reg.summary$adjr2,xlab="Number of Variables",ylab="Adjusted RSq",type="l")
+p = which.max(reg.summary$adjr2)
+points(p,reg.summary$adjr2[p], col="blue", pch=20)
+
+plot(reg.summary$cp,xlab="Number of Variables",ylab="Cp",type='l')
+p = which.min(reg.summary$cp)
+points(p,reg.summary$cp[p],col="blue", pch=20)
+
+plot(reg.summary$bic,xlab="Number of Variables",ylab="BIC",type='l')
+p = which.min(reg.summary$bic)
+points(p,reg.summary$bic[p],col="blue", pch=20)
+```
+
+Number of variables = 3, 8,9 could be used when fitting the models. 
+
+## Linear Model
+```{r}
+#Linear Regression
+#With 3 variables
+lm.fit = lm(crim~rad+dis+black, data=b.training)
+lm.pred = predict(lm.fit, b.testing, type="response")
+lm_MSE <- mean((lm.pred - b.testing$crim)^2); lm_MSE
+
+#With 9 variables
+lm.fit = lm(crim~rad+dis+black+lstat+medv+zn+nox+ptratio, data=b.training)
+lm.pred = predict(lm.fit, b.testing, type="response")
+lm_MSE <- mean((lm.pred - b.testing$crim)^2); lm_MSE
+
+```
+
+With 9 variables, the MSE only improves a little. So for the complexity of the model, I would just use three variables.
+MSE = 21.04
+
+## LASSO
+
+```{r}
+#LASSO
+ 
+lambda_try <- 10^seq(-2, 4, length.out = 99)
+cv_lasso = cv.glmnet(x = data.matrix(b.training[,-which(names(b.training) %in% c("crim"))]), 
+y=b.training$crim, alpha = 1, lambda=lambda_try,standardize = TRUE, nfolds = 10)
+
+#choose best lambda
+# Plot cross-validation results
+plot(cv_lasso)
+
+# Best cross-validated lambda
+lambda_cv <- cv_lasso$lambda.min
+
+# Fit final model
+model_lasso <- glmnet(x = data.matrix(b.training[,-which(names(b.training) %in% c("crim"))]), y=b.training$crim, alpha = 1, lambda = lambda_cv, standardize = TRUE)
+
+vip(model_lasso, num_features = 30, geom = "point")
+
+```
+
+```{r}
+
+train_control <- trainControl(method = "repeatedcv",
+                              number = 5,
+                              repeats = 5,
+                              search = "random",
+                              verboseIter = FALSE)
+
+lasso_model 	<- train(crim ~ rad+dis+black,
+                       data = b.training,
+                       metrics = 'RMSE',
+                       method = "glmnet",
+                       tuneGrid = expand.grid(alpha = 1, 
+                                              lambda = 1),
+                       tuneLength = 25,
+                       trControl = train_control)
+
+# Predict using the testing data
+lasso_pred = predict(lasso_model, newdata = b.testing)
+
+# Evaluate performance
+postResample(pred = na.omit(lasso_pred), obs = b.testing[,'crim'])
+
+lasso_MSE <- mean((lasso_pred - b.testing[, "crim"])^2); lasso_MSE
+
+```
+LASSO MSE is 17.64. better than OLS model.
+
+## Ridge
+
+```{r}
+
+#Ridge
+
+model_ridge = cv.glmnet(x = data.matrix(b.training[,-which(names(b.training) %in% c("crim"))]), 
+y=b.training$crim, alpha = 0)
+
+```
+
+```{r}
+# cross validation to train our ridge model to find the best lambda
+
+train_control <- trainControl(method = "repeatedcv",
+                              number = 5,
+                              repeats = 1,
+                              search = "random",
+                              verboseIter = FALSE)
+
+ridge_model 	<- train(crim ~ rad+dis+black,
+                       data = b.training,
+                       metrics = 'RMSE',
+                       method = "ridge",
+                       tuneLength = 25,
+                       trControl = train_control)
+
+# Predict using the testing data
+ridge_pred = predict(ridge_model, newdata = b.testing)
+
+# Evaluate performance
+postResample(pred = ridge_pred, obs = b.testing[,'crim'])
+
+ridge_MSE <- mean((ridge_pred - b.testing[, "crim"])^2); ridge_MSE
+
+
+```
+Ridge yields a MSE of 21.0417, which is worse than LASSO.
+
+(b) Propose a model (or set of models) that seem to perform well on this data set, and justify your answer. Make sure that you are evaluating model performance using validation set error, cross validation,or some other reasonable alternative, as opposed to using training error.
+
+Using cross validation and compare the MSE results of the linear, LASSO, an Ridge model, I conclude that LASSO is the best model based on the lowest MSE as well as RMSE.
+
+(c) Does your chosen model involve all of the features in the data set? Why or why not?
+
+No, it doesn't. I choose the best subset of the variables which contains 3 variables from the data Boston. 
+
+
+
+# Problem 7.7a
+
+The Wage data set contains a number of other features not explored
+in this chapter, such as marital status (maritl), job class (jobclass),
+and others. Explore the relationships between some of these other
+predictors and wage, and use non-linear fitting techniques in order to
+fit flexible models to the data. Create plots of the results obtained,
+and write a summary of your findings.
+
+```{r}
+
+data(Wage)
+
+plot(Wage$maritl,Wage$wage, main="Marital Status", xaxt="n")
+text(1:5, par("usr")[3] - 20, labels = levels(Wage$maritl),  cex = 0.75, srt = 90, pos = 2, xpd = TRUE)
+
+plot(Wage$jobclass, Wage$wage, main="Job Class")
+
+
+```
+People that are married and work in the information job class tend to have a higher wage.
+
+```{r}
+
+gam1 <- gam(wage ~ ns(year, 4) + s(age, 5) + education, data = Wage)
+gam2 <- gam(wage ~ ns(year, 4) + s(age, 5) + education + jobclass, data = Wage)
+gam3 <- gam(wage ~ ns(year, 4) + s(age, 5) + education + maritl, data = Wage)
+gam4 <- gam(wage ~ ns(year, 4) + s(age, 5) + education + jobclass + maritl, data = Wage)
+anova(gam1, gam2, gam3, gam4)
+
+par(mfrow = c(2, 2))
+plot.Gam(gam3, se = TRUE, col = "blue")
+
+```
+```{r}
+gam <- gam(wage ~ year + s(age, 5) + education + maritl, data = Wage)
+
+plot.Gam(gam, se = TRUE, col = "blue")
+```
+
+Year looks linear from gam3, so we can probably use linear variable for year. We can see that wage increases with years and education, and generally with age until 50. 
+
+# Problem 7.9a
+
+This question uses the variables dis (the weighted mean of distances to five Boston employment centers) and nox (nitrogen oxides concentration in parts per 10 million) from the Boston data. We will treat dis as the predictor and nox as the response.
+
+(a) Use the poly() function to fit a cubic polynomial regression to predict nox using dis. Report the regression output, and plot the resulting data and polynomial fits.
+```{r}
+fit <- lm(nox ~ poly(dis, 4), data = Boston)
+coef(summary(fit))
+
+```
+```{r}
+#We now create a grid of values for dis at which we want predictions, and then call the generic predict() function, specifying that we want standard errors as well.
+
+dislims <- range(Boston$dis)
+dis.grid <- seq(from = dislims[1], to = dislims[2])
+preds <- predict(fit, newdata = list(dis = dis.grid),
+    se = TRUE)
+se.bands <- cbind(preds$fit + 2 * preds$se.fit,
+    preds$fit - 2 * preds$se.fit)
+```
+
+```{r}
+par( mar = c(4.5, 4.5, 1, 1),
+    oma = c(0, 0, 4, 0))
+plot(Boston$dis, Boston$nox, xlim = dislims, cex = .5, col = "darkgrey")
+title("Degree-4 Polynomial", outer = T)
+lines(dis.grid, preds$fit, lwd = 2, col = "blue")
+matlines(dis.grid, se.bands, lwd = 1, col = "blue", lty = 3)
+```
+
+(b) Plot the polynomial fits for a range of different polynomial degrees (say, from 1 to 10), and report the associated residual sum of squares.
+
+```{r}
+#create a for loop 
+residss <- rep(NA, 10)
+for (i in 1:10) {
+  fit <- lm(nox ~ poly(dis, i), data = Boston)
+  residss[i] <- sum(fit$residuals ^ 2)
+  print(anova(lm(nox ~ poly(dis, i), data = Boston)))
+
+}
+plot(1:10, residss, type = 'l', xlab = "Degree", ylab = "Residual Sum of Squares")
+points(which.min(residss),residss[which.min(residss)], col="red", pch=20)
+
+```
+```{r}
+fit2 <- lm(nox ~ poly(dis, 2), data = Boston)
+fit3 <- lm(nox ~ poly(dis, 3), data = Boston)
+fit4 <- lm(nox ~ poly(dis, 4), data = Boston)
+fit5 <- lm(nox ~ poly(dis, 5), data = Boston)
+fit6 <- lm(nox ~ poly(dis, 6), data = Boston)
+anova(fit2,fit3,fit4,fit5,fit6)
+```
+Cubic polynomial is the best fit.
+
+(c) Perform cross-validation or another approach to select the optimal degree for the polynomial, and explain your results.
+
+```{r}
+library(boot)
+#corss validation
+d <- rep(NA,10)
+for (i in 1:10) {
+    glm.fit = glm(nox ~ poly(dis, i), data = Boston)
+    d[i] = cv.glm(Boston, glm.fit, K = 10)$delta[2]
+}
+
+cv.plot <- data.table(seq(1:10),d,keep.rownames = TRUE)
+ggplot(cv.plot, aes(V1,d)) + geom_point() + geom_line() +
+  scale_x_continuous(breaks = c(0:10))
+which.min(d)
+
+```
+4 degrees of polynomial appears to be the best selection. 
+
+(d) Use the bs() function to fit a regression spline to predict nox using dis. Report the output for the fit using four degrees of freedom. How did you choose the knots? Plot the resulting fit.
+
+```{r}
+range(Boston$dis)
+spline.fit <- lm(nox ~ bs(dis, df=4, knots=c(4,7,10)),data=Boston)
+spline.pred <- predict(spline.fit, newdata = list(dis = dis.grid), se = T)
+plot(Boston$dis, Boston$nox, col = "gray")
+lines(dis.grid, spline.pred$fit, lwd = 2)
+lines(dis.grid, spline.pred$fit + 2 * spline.pred$se, lty = "dashed")
+lines(dis.grid, spline.pred$fit - 2 * spline.pred$se, lty = "dashed")
+```
+The range of dis is approximately 1 to 13, so we set the knots at the points where we can split the data equally.
+
+(e) Now fit a regression spline for a range of degrees of freedom, and plot the resulting fits and report the resulting RSS. Describe the results obtained.
+
+```{r}
+
+cv.range <- 3:16
+res<- c()
+for (i in cv.range) {
+  fit <- lm(nox ~ bs(dis, df = i), data = Boston)
+  res <- c(res, sum(fit$residuals ^ 2))
+}
+plot(cv.range, res, type = 'l', xlab = 'df', ylab = 'RSS')
+```
+
+The plot shows that 10 degrees of freedom is the optimal choice.
+
+(f) Perform cross-validation or another approach in order to select the best degrees of freedom for a regression spline on this data.Describe your results.
+
+```{r}
+
+library(boot)
+#corss validation
+cv.range <- 3:16
+mse <- rep(NA,10)
+res<- c()
+for (i in cv.range) {
+    glm.fit = glm(nox ~ bs(dis,df= i), data = Boston)
+    mse = cv.glm(Boston, glm.fit, K = 10)$delta[1]
+    res <- c(res, mse)
+}
+
+which.min(res)
+
+plot(cv.range, res, type = 'l', xlab = 'degree of freedom', ylab = 'Test MSE')
+points(which.min(res)+2, res[which.min(res)], col = 'blue', pch = 20)
+
+```
+It shows that 10 degrees of freedom is the optimal choice.
+
+# Problem 7.10a
+
+10. This question relates to the College data set.
+
+(a) Split the data into a training set and a test set. Using out-of-state tuition as the response and the other variables as the predictors,perform forward stepwise selection on the training set in order to identify a satisfactory model that uses just a subset of the
+predictors.
+
+```{r}
+library(leaps)
+data(College)
+
+set.seed(12345678)
+train <- sample(1:dim(College)[1], dim(College)[1]*.75, rep=FALSE)
+test <- -train
+c.training<- College[train, ]
+c.testing= College[test, ]
+
+```
+
+```{r}
+
+f.atrix <- model.matrix(Outstate ~ ., data=c.training)
+forward.step.fit <- regsubsets(Outstate ~ ., data = College, subset = f.atrix, method = 'forward')
+summary(forward.step.fit)
+```
+Accept, F.Undergrad, Room.Board, perc.alumni, Expend, Grad.Rate are statistically significant.
+
+```{r}
+coef(forward.step.fit, id = 6)
+```
+
+(b) Fit a GAM on the training data, using out-of-state tuition as the response and the features selected in the previous step as the predictors. Plot the results, and explain your findings.
+
+```{r}
+
+gam.c1 <- gam(Outstate ~ s(Room.Board, 6) + s(Accept, 6) + s(perc.alumni, 6) + s(Expend, 6) + s(F.Undergrad, 6)+ s(Grad.Rate, 6), data = College, subset = f.atrix)
+par(mfrow = c(2,3))
+plot(gam.c1, se = TRUE, col = 'blue')
+
+```
+
+The fit curves shows that all the variables are have pretty good fit.
+
+(c) Evaluate the model obtained on the test set, and explain the results obtained.
+```{r}
+gam.pred <- predict(gam.c1, c.testing)
+RSS <- sum((c.testing$Outstate - gam.pred)^2) # based on equation (3.16)
+TSS <- sum((c.testing$Outstate - mean(c.testing$Outstate)) ^ 2)
+1 - (RSS / TSS)  # R-squared
+gam_MSE <- mean((gam.pred - c.testing$Outstate)^2); gam_MSE
+```
+It yields an MSE of 3622744. The R-squared is 0.79, which is not too bad.
+
+
+(d) For which variables, if any, is there evidence of a non-linear relationship with the response?
+
+```{r}
+summary(gam.c1)
+```
+
+There is a non-linear relationship for all the variables in gam.c1.
