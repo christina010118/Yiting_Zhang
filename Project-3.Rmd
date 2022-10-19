@@ -1,0 +1,168 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse) 
+library(foreign)
+library(tis)
+library(FNN)
+library(fpp3)
+library(tseries)
+library(forecast)
+library(fma)
+library(tidyr) 
+library(vars)
+library(quantmod)
+library(rugarch)
+library(lubridate)
+library(prophet)
+library(fable.prophet)
+library(zoo)
+```
+
+
+
+# Loading data
+
+```{r}
+global_temps = read.csv("GlobalTemperatures.csv") %>% 
+  dplyr::filter(dt >= "1920-01-01") %>%
+  dplyr::select(landaveragetemperature)
+
+global_temps.ts = ts(global_temps, start = c(1920,1), freq = 12)
+
+train.ts = window(global_temps.ts, end = c(2000,12))
+test.ts = window(global_temps.ts, start = c(2001,1))
+```
+
+```{r}
+autoplot(train.ts) + labs(title="Average Land Temperature Since 1750") + labs(x="Time") + labs(y="Temperature (°C)")
+```
+
+```{r}
+autoplot(decompose(train.ts))
+```
+# Model Fitting
+
+## ARIMA
+
+```{r}
+arima.fit <- forecast::auto.arima(train.ts)
+plot(train.ts,main="Average Land Temperature with ARIMA Fit",ylab="Temperature (°C)",xlab="Months")
+lines(arima.fit$fitted,col="red")
+accuracy(arima.fit)
+checkresiduals(arima.fit)
+```
+## ETS
+
+```{r}
+ets.fit <- forecast::ets(train.ts)
+plot(train.ts,main="Average Land Temperature with ETS Fit",ylab="Temperature (°C)",xlab="Months")
+lines(ets.fit$fitted,col="orange")
+accuracy(ets.fit)
+checkresiduals(ets.fit)
+```
+
+## Holt-Winters
+
+```{r}
+hw.fit <- hw(train.ts, h = 180)
+plot(train.ts,main="Average Land Temperature with Holt-Winters Fit",ylab="Temperature (°C)",xlab="Months")
+lines(hw.fit$fitted,col="green")
+accuracy(hw.fit)
+checkresiduals(hw.fit)
+```
+
+
+
+## NNETAR
+
+```{r}
+nnetar.fit <- nnetar(train.ts)
+plot(train.ts,main="Average Land Temperature with NNETAR Fit",ylab="Temperature (°C)",xlab="Months")
+lines(nnetar.fit$fitted,col="blue")
+accuracy(nnetar.fit)
+checkresiduals(nnetar.fit)
+```
+
+## Prophet
+
+```{r}
+prophet.fit <- fable.prophet::prophet(train.ts~season(period=12,order=2,type="additive"))
+plot(train.ts,main="Average Land Temperature with Prophet Fit",ylab="Temperature (°C)",xlab="Months")
+lines(fitted(prophet.fit),col="purple")
+df.train.ts <- data.frame("ds"=as.Date(time(train.ts)),Y=as.matrix(train.ts))
+colnames(df.train.ts) <- c("ds","y")
+
+fit.prophet(prophet.fit,df.train.ts)
+```
+# Forecasting
+
+## ARIMA
+
+```{r}
+arima.forecast = forecast(arima.fit, h=180)
+autoplot(train.ts) + 
+  autolayer(arima.forecast, series = "ARIMA") + 
+  autolayer(test.ts) + 
+  xlim(1995, 2016)
+```
+
+```{r}
+accuracy(arima.forecast, test.ts)
+```
+
+## ETS
+
+```{r}
+autoplot(ets.forecast, h = 180)
+autoplot(train.ts) +
+  autolayer(ets.forecast, series = "ETS") +
+  autolayer(test.ts) +
+  xlim(1995, 2016)
+```
+
+```{r}
+accuracy(ets.forecast, test.ts)
+```
+
+## Holt-Winters
+
+```{r}
+hw.forecast = forecast(hw.fit)
+autoplot(train.ts) + 
+  autolayer(hw.fit, series = "Holt-Winters") + 
+  autolayer(test.ts) + 
+  xlim(1995, 2016)
+
+```
+
+```{r}
+accuracy(hw.forecast, test.ts)
+```
+
+## NNETAR 
+
+
+```{r}
+nnetar.forecast = forecast(nnetar.fit, h = 180)
+autoplot(train.ts) + 
+  autolayer(nnetar.forecast, series = "NNETAR") +
+  autolayer(test.ts) + 
+  xlim(1995, 2016)
+
+```
+
+```{r}
+accuracy(nnetar.forecast, test.ts)
+```
+
+## Prophet
+
+```{r}
+future <- make_future_dataframe(prophet.fit, periods = 180)
+forecast <- predict(prophet.fit, future)
+  prophet_plot_components(prophet.fit)
+```
