@@ -1,0 +1,276 @@
+---
+gtitle: "Econ 187 Final Project"
+author: "Shannan Liu (305172952), Christina Zhang (605325840), Austin Pham (905318112), Zachary Wrubel (205102460)"
+date: "5/28/2022"
+fontfamily: mathpazo
+output:
+  pdf_document:
+    toc: true
+  fig_caption: yes
+  highlight: haddock
+  number_sections: true
+  df_print: paged
+fontsize: 10.5pt
+editor_options:
+chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls(all=TRUE))
+library(tidyverse)
+library(GGally)
+library(caret)
+library(ggplot2)
+library(car)
+library(pls)
+library(glmnet)
+library(vip)
+library(dplyr)
+library(leaps)
+library(MASS)
+library(boot)
+library(tree)
+library(rpart)
+library(rpart.plot)
+library(ISLR2)
+library(randomForest)
+library(e1071)
+library(Boruta)
+library(gbm)
+library(BART)
+```
+
+\newpage
+
+# Introduction
+
+In this project, we aim to build a generalized model for predicting whether the closing price of a stock from the S&P500 will go up or down the next week. Our dataset is composed of 5572 weekly observations, and it has 125 predictor variables. The feature-space includes indicator variables that store temporal information, and it contains financial data from various indices. The data also has momentum signals such as moving averages. Within our dataset, all the numeric predictor variables are normalized as returns. 
+
+We can reduce the dimensionality of our data with the Boruta Algorithm or Principal Component Analysis.
+
+Afterwards, we'll conduct our classification task with the following models and select the model that performs the best:
+
+1. Logistic regression
+2. KNN
+3. Bagging
+4. Random forest
+5. Boosting
+6. Radial support vector machine
+7. Polynomial support vector machine
+
+Finally, we'll evaluate model performance on unseen data.
+
+# Loading in Data, Train-Test-Validation Split
+
+```{r}
+set.seed(42)
+# read in data
+df <- read_csv("weekly_stock_data_large.csv")
+df <- df[,!names(df) %in% c('Date')]
+
+# removing special characters from column names
+names(df) <- gsub("^", "", names(df), fixed = TRUE)
+names(df) <- gsub("=", "", names(df), fixed = TRUE)
+names(df) <- gsub("-", ".", names(df), fixed = TRUE)
+
+# baseline model acc
+mean(df$close) # our data set is balanced
+
+# converting target variable to a factor
+df$close <- as.factor(df$close)
+
+# remove weeks indicator vars
+weeks <- c()
+for (n in names(df)){
+  if (grepl('week', n,fixed = T)){
+    weeks <- c(weeks,n)
+  }
+}
+
+df <- df[,!names(df) %in% weeks]
+
+# create training and validation set
+sample.index <- createDataPartition(df$close,p=0.8,list=FALSE)
+tv_df <- as.data.frame(df[sample.index,])
+test <- as.data.frame(df[-sample.index,])
+
+# train-validation split
+train.index <- createDataPartition(tv_df$close,p=0.7,list=FALSE)
+train <- as.data.frame(tv_df[train.index,])
+val  <- as.data.frame(tv_df[-train.index,])
+```
+
+
+# EDA
+Now let's see if we can identify relationships between different variables and whether or not the closing price will go up or down.
+
+## Scatterplots  
+```{r}
+ggplot(data = train, 
+       aes(x = open, y = high, color = close),
+       ) + 
+  geom_point() + 
+  ggtitle("High Price vs  Open Price")
+
+ggplot(data = train, 
+       aes(x = low, y = high, color = close),
+       ) + 
+  geom_point() + 
+  ggtitle("High Price vs Low Price")
+
+ggplot(data = train, 
+       aes(x = low, y = open, color = close),
+       ) + 
+  geom_point() + 
+  ggtitle("Open Price vs Low Price")
+
+ggplot(data = train, 
+       aes(x = FTSE.close, y = DJI.close, color = close),
+       ) + 
+  geom_point() + 
+  ggtitle("DJIA Close Price vs FTSE Close Price")
+
+train$GCF.close
+ggplot(data = train, 
+       aes(x = FCHI.close, y = open, color = close),
+       ) + 
+  geom_point() + 
+  ggtitle("Open Price vs Oil Close Price")
+```
+
+From these initial plots, we can see that there is no discernible pattern as to whether or not next week's closing price will go up or down based on only a couple of variables. This also demonstrates the difficulty of this classification task.
+
+Hence, we move onto more robust feature selection methods to identify the most important variables from our dataset.
+
+## Boxplots  
+
+```{r}
+ggplot(data = train, 
+       aes(x = close, y = VIX.close, fill = close),
+       ) + 
+  geom_boxplot() + 
+  ggtitle("Boxplot")
+ggplot(data = train, 
+       aes(x = close, y = GSPC.close, fill = close),
+       ) + 
+  geom_boxplot() + 
+  ggtitle("Boxplot")
+ggplot(data = train, 
+       aes(x = close, y = GCF.ma20, fill = close),
+       ) + 
+  geom_boxplot() + 
+  ggtitle("Boxplot")
+ggplot(data = train, 
+       aes(x = close, y = GCF.close, fill = close),
+       ) + 
+  geom_boxplot() + 
+  ggtitle("Boxplot")
+ggplot(data = train, 
+       aes(x = close, y = VIX.ma60, fill = close),
+       ) + 
+  geom_boxplot() + 
+  ggtitle("Boxplot")
+ggplot(data = train, 
+       aes(x = close, y = CLF.volume, fill = close),
+       ) + 
+  geom_boxplot() + 
+  ggtitle("Boxplot")
+```
+
+# Boruta Algorithm Feature Selection
+```{r}
+# obtain Boruta results
+Bor.res <- Boruta(close~., data = train)
+
+# Plot the Boruta Algorithm Results
+plot(Bor.res, xlab = "", xaxt = "n", main="Boruta Algorithm Feature Importance")
+
+# making the graph look better
+lz<-lapply(1:ncol(Bor.res$ImpHistory),function(i)
+Bor.res$ImpHistory[is.finite(Bor.res$ImpHistory[,i]),i])
+names(lz) <- colnames(Bor.res$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(Bor.res$ImpHistory), cex.axis = 0.7)
+
+boruta_signif <- names(Bor.res$finalDecision[Bor.res$finalDecision %in% c("Confirmed", "Tentative")])
+boruta_signif_Conf <- names(Bor.res$finalDecision[Bor.res$finalDecision %in% c("Confirmed")])
+boruta_signif_Tent <- names(Bor.res$finalDecision[Bor.res$finalDecision %in% c("Tentative")])
+boruta_signif_Reject <- names(Bor.res$finalDecision[Bor.res$finalDecision %in% c("Rejected")])
+```
+
+# Modelling
+
+## Logistic Regression  
+```{r}
+logit = glm(close ~ ., data = train, family = "binomial")
+preds <- ifelse(predict(logit,val,type = "response") > 0.5,1,0)
+confusionMatrix(as.factor(val$close), as.factor(preds))
+```
+
+## SVC
+```{r}
+svc <- svm(close ~ ., data = train,
+             kernel = 'linear', 
+             cost = 1,
+             scale = F)
+preds <- predict(svc,val,type = "response")
+confusionMatrix(as.factor(val$close), as.factor(preds))
+```
+
+## Radial SVM 
+```{r}
+r_svm <- svm(close ~ ., data = train,
+             kernel = 'radial', 
+             cost = 1, gamma = 0.5,
+             scale = F)
+preds <- predict(r_svm,val,type = "response")
+confusionMatrix(as.factor(val$close), as.factor(preds))
+```
+
+## Poly SVM 
+```{r}
+p_svm <- svm(close ~ ., data = train,
+             kernel = 'polynomial', 
+             cost = 1, degree = 3,
+             gamma = 0.5,
+             scale = F)
+preds <- predict(p_svm,val,type = "response")
+confusionMatrix(as.factor(val$close), as.factor(preds))
+```
+
+## Random Forest 
+```{r}
+set.seed(1)
+rf.close <- randomForest(close ~., data=train, 
+                         importance = TRUE)
+yhat.rf <- predict(rf.close, newdata=val)
+confusionMatrix(as.factor(val$close), as.factor(yhat.rf))
+varImpPlot(rf.close, n.var=17, scale=TRUE, 
+           main= "Random Forest Variable Importance Plot")
+```
+
+## Boosting 
+```{r}
+# boosting
+boost <- gbm(close ~ ., data = train,
+  distribution = "multinomial", 
+  n.trees = 500,
+  interaction.depth = 4, 
+  shrinkage = 0.01, 
+  verbose = F)
+preds <- predict(boost, test, type = "response")
+labels <- colnames(preds)[apply(preds, 1, which.max)]
+boost_acc <- mean(as.integer(labels) == test$close)
+boost_acc
+summary(boost)
+boost
+
+#Partial Dependence Plots
+plot(boost.close, i = "GCF.ma5")
+plot(boost.close, i = "DJI.close")
+```
+
+
+
