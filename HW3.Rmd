@@ -1,0 +1,805 @@
+---
+title: "HW3"
+author: "Yiting Zhang"
+date: '2022-05-22'
+output:
+  pdf_document: default
+  html_document: default
+  latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list=ls())
+
+library(rpart)
+library(tree)
+library(ISLR)
+library(ggplot2)
+library(randomForest)
+library(BART) #BART
+library(gbm)  #boosting
+library(glmnet) #ridge and LASSO
+library(caret)
+library(MASS) #QDA
+
+```
+
+# Problem 8.8a
+
+In the lab, a classification tree was applied to the Carseats data set after
+converting Sales into a qualitative response variable. Now we will
+seek to predict Sales using regression trees and related approaches,
+treating the response as a quantitative variable.
+
+(a) Split the data set into a training set and a test set.
+
+```{r}
+
+data(Carseats)
+
+set.seed(12345678)
+train <- sample(1:dim(Carseats)[1], dim(Carseats )[1]*.75, rep=FALSE)
+test <- -train
+car.train<- Carseats[train, ]
+car.test <- Carseats[test, ]
+
+```
+
+(b) Fit a regression tree to the training set. Plot the tree, and interpret
+the results. What test MSE do you obtain
+
+```{r}
+#regression tree
+
+reg.tree <- tree(Sales ~ ., data = car.train)
+plot(reg.tree)
+text(reg.tree, pretty=0)
+
+summary(reg.tree)
+
+```
+
+```{r}
+
+#testing MSE
+
+pred.reg.tree <- predict(reg.tree, newdata = car.test)
+test.mse <- mean((pred.reg.tree - car.test$Sales)^2)
+
+cat('The testing MSE is :', test.mse)
+```
+Using the regression tree, the most important indicator of Sales appears to be shelving location, because the first knot differentiates Good locations from Bad and Medium locations. And the testing MSE is 4.32.
+
+(c) Use cross-validation in order to determine the optimal level of
+tree complexity. Does pruning the tree improve the test MSE?
+
+```{r}
+
+set.seed(123)
+cv.reg.tree <- cv.tree(reg.tree)
+
+par(mfrow = c(1, 2))
+plot(cv.reg.tree$size, cv.reg.tree$dev, type = "b")
+plot(cv.reg.tree$k, cv.reg.tree$dev, type = "b")
+
+
+```
+From the plots, it looks like 4 or 12 is the best number of terminal nodes with under 1800 cross validation errors. Therefore, we should try to prune the tree.
+ 
+```{r}
+#Let's try 4
+prune.car <- prune.tree(reg.tree, best = 4)
+plot(prune.car)
+text(prune.car, pretty = 0)
+
+predict.prune <- predict(prune.car, newdata = car.test)
+mean((predict.prune - car.test$Sales)^2)
+cat('The testing MSE for 4 terminal nodes is :', mean((predict.prune - car.test$Sales)^2))
+
+```
+ 
+```{r}
+
+#Let's try 12 
+prune.car <- prune.tree(reg.tree, best = 12)
+plot(prune.car)
+text(prune.car, pretty = 0)
+
+predict.prune <- predict(prune.car, newdata = car.test)
+mean((predict.prune - car.test$Sales)^2)
+cat('The testing MSE for 12 terminal nodes is :', mean((predict.prune - car.test$Sales)^2))
+
+```
+In this case, the MSE improves from the original tree, and we would choose 4 terminal nodes because the MSE for 12 terminal nodes did not improve that much from 4. So for the sake of interpretability, we would choose 4 terminal nodes for the prune tree.
+
+
+(d) Use the bagging approach in order to analyze this data. What
+test MSE do you obtain? Use the importance() function to determine
+which variables are most important.
+
+```{r}
+
+set.seed(123)
+car.bagging <- randomForest(Sales ~ ., data = Carseats, subset = train, ntree=500, mtry = 10,
+                        importance = TRUE)
+car.bagging
+
+pred.bagging <- predict(car.bagging, newdata = car.test)
+mean((pred.bagging - car.test$Sales)^2)
+cat('The testing MSE is :', mean((pred.bagging - car.test$Sales)^2))
+
+```
+The MSE is much lower than the regression tree and the prune tree. Bagging essentially reduces the variance.
+
+```{r}
+importance(car.bagging)
+
+varImpPlot(car.bagging)
+```
+The Importance() function shows that Shelve locations and Price are the most important variable.
+
+
+(e) Use random forests to analyze this data. What test MSE do you
+obtain? Use the importance() function to determine which variables
+are most important. Describe the effect of m, the number of
+variables considered at each split, on the error rate
+obtained.
+
+```{r}
+
+car.rf=randomForest(Sales~., data=Carseats, subset=train, importance=TRUE)
+importance(car.rf)
+
+mtry_=2:10
+errors=rep(0,length(mtry_))
+
+for(i in 1:length(mtry_)){
+  m=mtry_[i]
+  carseats.rf=randomForest(Sales~.,data=Carseats,
+                           subset=train,mtry=mtry_[i],
+                           importance=TRUE)
+  pred.sales=predict(carseats.rf, car.test)
+  test.mse=mean((pred.sales - car.test$Sales)^2)
+  
+  errors[i]=test.mse
+}
+errors
+```
+The importance() function still indicates that Shelve locations and Price are the two most important indicators, same as Part(d).
+And testing MSE shows that the closer m is to 10, the smaller the MSE.
+
+(f) Now analyze the data using BART, and report your results.
+
+```{r}
+
+# gbart() function fits a Bayesian additive regression tree model to the data set. 
+# gbart() function is designed for quantitative outcome variables.
+
+x <- Carseats[, 2:11]
+y <- Carseats[, "Sales"]
+xtrain <- x[train, ]
+ytrain <- y[train]
+xtest <- x[-train, ]
+ytest <- y[-train]
+set.seed(123)
+bart.fit <- gbart(xtrain, ytrain, x.test = xtest)
+
+```
+```{r}
+
+#Test MSE
+
+yhat.bart <- bart.fit$yhat.test.mean
+mean((ytest - yhat.bart)^2)
+
+cat('The testing MSE is :', mean((ytest - yhat.bart)^2))
+
+```
+The testing MSE is lower than both regression tree and bagging method.
+
+```{r}
+#check how many times each variable appeared in the collection od trees
+
+order_ <- order(bart.fit$varcount.mean, decreasing = TRUE)
+bart.fit$varcount.mean[order_]
+
+```
+It appears that Price shows up the most.
+
+# Problem 8.10a
+
+We now use boosting to predict Salary in the Hitters data set.
+
+
+(a) Remove the observations for whom the salary information is
+unknown, and then log-transform the salaries.
+
+```{r}
+
+rm(list = ls())
+data(Hitters)
+
+```
+
+```{r}
+#check how many unknown there are in the dataset
+sum(is.na(Hitters))
+#remove unknowns
+hitters <- na.omit(Hitters)
+#check again
+sum(is.na(hitters))
+
+```
+
+(b) Create a training set consisting of the first 200 observations, and
+a test set consisting of the remaining observations.
+
+```{r}
+
+set.seed(12345678)
+train <- sample(1:dim(hitters)[1], dim(hitters )[1]*.75, rep=FALSE)
+test <- -train
+hit.train<- hitters[train, ]
+hit.test <- hitters[test, ]
+
+```
+
+
+(c) Perform boosting on the training set with 1,000 trees for a range
+of values of the shrinkage parameter. Produce a plot with
+different shrinkage values on the x-axis and the corresponding
+training set MSE on the y-axis.
+
+```{r}
+
+set.seed(123)
+p <- seq(from=-10, to=0, by=0.05)
+shrinkage=10^p
+errors=rep(0,length(shrinkage))
+for (i in 1:length(shrinkage)){
+  s=shrinkage[i]
+  hit.boost=gbm(Salary~., data=hit.train, 
+                 distribution="gaussian", 
+                 n.trees=1000,
+                 shrinkage = s,
+                 interaction.depth=5)
+  pred.boost=predict(hit.boost,newdata=hit.train, n.trees=1000)
+  errors[i]=mean((pred.boost-hit.train$Salary)^2)
+}
+plot(shrinkage,errors, ylab = "Training MSE", xlab = "Shrinkage Values", 
+     type = "b")
+
+```
+
+```{r}
+#Find the minimum MSE
+min(errors)
+shrinkage[which.min(errors)]
+```
+The result from boosting shows that the minimum MSE is 1.548924e-11 where the shrinkage is 0.89.
+
+(d) Produce a plot with different shrinkage values on the x-axis and
+the corresponding test set MSE on the y-axis.
+
+```{r}
+
+set.seed(123)
+
+for (i in 1:length(shrinkage)){
+  s=shrinkage[i]
+  hit.boost=gbm(Salary~., data=hit.train, 
+                 distribution="gaussian", 
+                 n.trees=1000,
+                 shrinkage = s,
+                 interaction.depth=5)
+  pred.boost=predict(hit.boost,newdata=hit.test, n.trees=1000)
+  errors[i]=mean((pred.boost-hit.test$Salary)^2)
+}
+plot(shrinkage,errors,ylab = "Testing MSE", xlab = "Shrinkage Values", 
+     type = "b")
+
+```
+
+```{r}
+#Find the minimum MSE
+min(errors)
+shrinkage[which.min(errors)]
+```
+The minimum MSE is 94273.23 where the shrinkage is 0.002238721.
+
+(e) Compare the test MSE of boosting to the test MSE that results
+from applying two of the regression approaches seen in Chapters 3 and 6.
+
+Compare Boosting with LASSO and linear regression:
+
+```{r}
+#LASSO
+
+library(vip)
+lambda_try <- 10^seq(-2, 4, length.out = 99)
+cv_lasso = cv.glmnet(x = data.matrix(hit.train[,-which(names(hit.train) %in% c("Salary"))]), 
+y=hit.train$Salary, alpha = 1, lambda=lambda_try,standardize = TRUE, nfolds = 10)
+
+#choose best lambda
+# Plot cross-validation results
+plot(cv_lasso)
+
+# Best cross-validated lambda
+lambda_cv <- cv_lasso$lambda.min
+
+# Fit final model
+model_lasso <- glmnet(x = data.matrix(hit.train[,-which(names(hit.train) %in% c("Salary"))]), 
+y=hit.train$Salary, alpha = 1, lambda = lambda_cv, standardize = TRUE)
+
+vip(model_lasso, num_features = 30, geom = "point")
+
+```
+
+
+```{r}
+
+train_control <- trainControl(method = "repeatedcv",
+                              number = 5,
+                              repeats = 5,
+                              search = "random",
+                              verboseIter = FALSE)
+
+lasso_model 	<- train(Salary ~ .,
+                       data = hit.train,
+                       metrics = 'RMSE',
+                       method = "glmnet",
+                       tuneGrid = expand.grid(alpha = 1, 
+                                              lambda = 1),
+                       tuneLength = 25,
+                       trControl = train_control)
+
+# Predict using the testing data
+lasso_pred = predict(lasso_model, newdata = hit.test)
+
+# Evaluate performance
+postResample(pred = na.omit(lasso_pred), obs = hit.test[,'Salary'])
+
+lasso_MSE <- mean((lasso_pred - hit.test[, "Salary"])^2); lasso_MSE
+
+```
+
+Lasso Model yields a MSE of 112119.2.
+
+
+```{r}
+#Linear Regression Model
+
+lm.fit <- lm(Salary ~ ., data=hit.train)
+pred.lm <- predict(lm.fit, hit.test)
+lm.mse <- mean((pred.lm - hit.test$Salary)^2)
+
+lm.mse
+
+```
+The Linear regression Model yields a MSE of 112011.
+
+
+Compare to LASSO model and Linear Regression model, Boosting contributes to the lowest MSE.
+
+(f) Which variables appear to be the most important predictors in
+the boosted model?
+
+```{r}
+
+best.boost <- gbm(Salary ~ ., data=hit.train, distribution = 'gaussian', n.trees=1000, shrinkage = shrinkage[which.min(errors)])
+summary(best.boost)
+
+```
+
+It appears that Walks are the most important predictor.
+
+(g) Now apply bagging to the training set. What is the test set MSE
+for this approach?
+
+```{r}
+
+set.seed(123)
+hit.bagging <- randomForest(Salary ~ ., data = hitters, subset = train, ntree=500, mtry = 10,
+                        importance = TRUE)
+hit.bagging
+
+pred.bagging <- predict(hit.bagging, newdata = hit.test)
+mean((pred.bagging - hit.test$Salary)^2)
+cat('The testing MSE is :', mean((pred.bagging - hit.test$Salary)^2))
+
+```
+Compare with boosting method, bagging has a higher MSE. Therefore, we should choose boosting as the best method.
+
+# Problem 8.12a
+
+Apply boosting, bagging, random forests to a data set
+of your choice. Be sure to fit the models on a training set and to
+evaluate their performance on a test set. How accurate are the results
+compared to simple methods like linear or logistic regression? Which
+of these approaches yields the best performance?
+
+```{r}
+
+data("Boston")
+
+set.seed(12345678)
+train <- sample(1:dim(Boston)[1], dim(Boston )[1]*.75, rep=FALSE)
+test <- -train
+boston.train<- Boston[train, ]
+boston.test <- Boston[test, ]
+
+
+```
+
+```{r}
+#boosting
+
+set.seed(123)
+
+p <- seq(from=-10, to=0, by=0.05)
+shrinkage=10^p
+errors=rep(0,length(shrinkage))
+
+for (i in 1:length(shrinkage)){
+  s=shrinkage[i]
+  hit.boost=gbm(crim~., data=boston.train, 
+                 distribution="gaussian", 
+                 n.trees=1000,
+                 shrinkage = s,
+                 interaction.depth=5)
+  pred.boost=predict(hit.boost,newdata=boston.test, n.trees=1000)
+  errors[i]=mean((pred.boost-boston.test$crim)^2)
+}
+plot(shrinkage,errors,ylab = "Testing MSE", xlab = "Shrinkage Values", 
+     type = "b")
+
+#Find the minimum MSE
+min(errors)
+shrinkage[which.min(errors)]
+
+cat('The testing MSE is :', min(errors))
+
+```
+
+
+
+```{r}
+#bagging
+
+set.seed(123)
+boston.bagging <- randomForest(crim ~ ., data = Boston, subset = train, ntree=500, mtry = 10,
+                        importance = TRUE)
+boston.bagging
+
+pred.bagging <- predict(boston.bagging, newdata = boston.test)
+mean((pred.bagging - boston.test$crim)^2)
+cat('The testing MSE is :', mean((pred.bagging - boston.test$crim)^2))
+
+```
+
+
+
+```{r}
+#random forest
+
+boston.rf=randomForest(crim~., data=Boston, subset=train, importance=TRUE)
+importance(boston.rf)
+
+mtry_=2:10
+errors=rep(0,length(mtry_))
+
+for(i in 1:length(mtry_)){
+  m=mtry_[i]
+  boston.rf=randomForest(crim~.,data=Boston,
+                           subset=train,mtry=mtry_[i],
+                           importance=TRUE)
+  pred.crim=predict(boston.rf, boston.test)
+  test.mse=mean((pred.crim - boston.test$crim)^2)
+  
+  errors[i]=test.mse
+}
+errors
+
+cat('The testing MSE is :', mean(errors))
+
+```
+```{r}
+#Linear Regression Model
+
+lm.fit <- lm(crim ~ ., data=boston.train)
+pred.lm <- predict(lm.fit, boston.test)
+lm.mse <- mean((pred.lm - boston.test$crim)^2)
+
+cat('The testing MSE is :', lm.mse)
+
+```
+
+```{r}
+#Logistic Regression
+
+glm.fit=glm(crim~.,family=gaussian,data=boston.train)
+glm.prob=predict(glm.fit,boston.test,type="response")
+
+glm.mse <- mean((glm.prob - boston.test$crim)^2)
+
+cat('The testing MSE is :', glm.mse)
+
+```
+
+Compare the models above, we can see that boosting yields the lowest MSE and has the best performance, followed by linear regression and logistic regression model.
+
+# Problem 9.5a
+
+We have seen that we can fit an SVM with a non-linear kernel in order
+to perform classification using a non-linear decision boundary.We will
+now see that we can also obtain a non-linear decision boundary by
+performing logistic regression using non-linear transformations of the
+features.
+
+(a) Generate a data set with n = 500 and p = 2, such that the observations
+belong to two classes with a quadratic decision boundary
+between them.
+
+```{r}
+set.seed(123)
+x1 <- runif (500) - 0.5
+x2 <- runif (500) - 0.5
+y <- 1 * (x1^2 - x2^2 > 0)
+
+```
+
+
+(b) Plot the observations, colored according to their class labels.
+Your plot should display X1 on the x-axis, and X2 on the yaxis.
+
+```{r}
+
+plot(x1[y == 0], x2[y == 0], col = "orange", main="Observations", xlab = "x1", ylab = "x2", pch = 18)
+points(x1[y == 1], x2[y == 1], col = "green", pch = 18)
+
+```
+
+(c) Fit a logistic regression model to the data, using X1 and X2 as
+predictors.
+
+```{r}
+
+glm.fit=glm(y~x1+x2,family=binomial)
+summary(glm.fit)
+
+```
+
+(d) Apply this model to the training data in order to obtain a predicted
+class label for each training observation. Plot the observations,
+colored according to the predicted class labels. The
+decision boundary should be linear.
+
+```{r}
+data = data.frame(x1 = x1, x2 = x2, y = y)
+glm.prob=predict(glm.fit,data,type="response")
+lm.pred = ifelse(glm.prob > 0.5, 1, 0)
+data.1 = data[lm.pred == 1, ]
+data.2 = data[lm.pred == 0, ]
+plot(data.1$x1, data.1$x2, col = "blue", xlab = "x1", ylab = "x2", pch = 18)
+points(data.2$x1, data.2$x2, col = "green", pch = 18)
+
+```
+
+(e) Now fit a logistic regression model to the data using non-linear
+functions of X1 and X2 as predictors (e.g. X21 , X1×X2, log(X2),and so forth).
+
+```{r}
+
+glm.fit.nonlinear=glm(y ~ poly(x1, 2) + poly(x2, 2) + I(x1 * x2), family = "binomial")
+summary(glm.fit.nonlinear)
+
+```
+
+(f) Apply this model to the training data in order to obtain a predicted
+class label for each training observation. Plot the observations,
+colored according to the predicted class labels. The
+decision boundary should be obviously non-linear. If it is not,
+then repeat (a)-(e) until you come up with an example in which
+the predicted class labels are obviously non-linear.
+
+```{r}
+
+glm.prob=predict(glm.fit.nonlinear,data,type="response")
+lm.pred = ifelse(glm.prob > 0.5, 1, 0)
+data.1 = data[lm.pred == 1, ]
+data.2 = data[lm.pred == 0, ]
+plot(data.1$x1, data.1$x2, col = "blue", xlab = "x1", ylab = "x2", pch = 18)
+points(data.2$x1, data.2$x2, col = "green", pch = 18)
+```
+
+(g) Fit a support vector classifier to the data with X1 and X2 as
+predictors. Obtain a class prediction for each training observation.
+Plot the observations, colored according to the predicted
+class labels.
+
+```{r}
+
+library(e1071)
+
+svm.fit <- svm(as.factor(y) ~ x1+x2,data=data, kernel = "linear", cost = 0.1)
+plot(svm.fit, data)
+
+```
+
+```{r}
+
+svm.pred <- predict(svm.fit, data)
+table(predict = svm.pred, truth = data$y)
+
+data.1 = data[svm.pred == 1, ]
+data.2 = data[svm.pred == 0, ]
+plot(data.1$x1, data.1$x2, col = "blue", xlab = "x1", ylab = "x2", pch = 18)
+points(data.2$x1, data.2$x2, col = "red", pch = 18)
+
+```
+The SVM model put x1 x2 into the same classification.
+
+(h) Fit a SVM using a non-linear kernel to the data. Obtain a class
+prediction for each training observation. Plot the observations,
+colored according to the predicted class labels.
+
+
+```{r}
+
+#polynomial case
+svm.fit.nonlinear <- svm(as.factor(y) ~ x1+x2,data=data, kernel = "polynomial", d=2, cost = 0.1)
+plot(svm.fit.nonlinear, data)
+
+
+```
+
+```{r}
+
+svm.pred <- predict(svm.fit.nonlinear, data)
+table(predict = svm.pred, truth = data$y)
+
+data.1 = data[svm.pred == 1, ]
+data.2 = data[svm.pred == 0, ]
+plot(data.1$x1, data.1$x2, col = "blue", xlab = "x1", ylab = "x2", pch = 18)
+points(data.2$x1, data.2$x2, col = "red", pch = 18)
+
+```
+
+```{r}
+
+#radial case
+svm.fit.radial <- svm(as.factor(y) ~ x1+x2,data=data, kernel = "polynomial", gamma=1, cost = 10)
+plot(svm.fit.radial, data)
+
+
+```
+
+```{r}
+
+svm.pred <- predict(svm.fit.radial, data)
+table(predict = svm.pred, truth = data$y)
+
+data.1 = data[svm.pred == 1, ]
+data.2 = data[svm.pred == 0, ]
+plot(data.1$x1, data.1$x2, col = "blue", xlab = "x1", ylab = "x2", pch = 18)
+points(data.2$x1, data.2$x2, col = "red", pch = 18)
+
+```
+(i) Comment on your results.
+
+In conclusion, we can see that the non-linear SVM and Logistic Regression Model are useful tools to identify the boundaries. For further investigation, cross validation would be beneficial to find the optimal cost for SVM by tuning the parameters gamma and cost, and generate more accurate boundaries.
+
+# Problem 9.7a
+
+In this problem, you will use support vector approaches in order to
+predict whether a given car gets high or low gas mileage based on the
+Auto data set.
+
+(a) Create a binary variable that takes on a 1 for cars with gas
+mileage above the median, and a 0 for cars with gas mileage
+below the median.
+
+```{r}
+
+data(Auto)
+mpg.median = median(Auto$mpg)
+mpg01 = ifelse(Auto$mpg > mpg.median, 1, 0)
+Auto$mpg01 = as.factor(mpg01)
+
+```
+
+(b) Fit a support vector classifier to the data with various values
+of cost, in order to predict whether a car gets high or low gas
+mileage. Report the cross-validation errors associated with different
+values of this parameter. Comment on your results. Note
+you will need to fit the classifier without the gas mileage variable
+to produce sensible results.
+
+```{r}
+
+set.seed(123)
+tune.out <- tune(svm, mpg01 ~ ., data = Auto, kernel = "linear", 
+    ranges = list(cost = c(0.001, 0.01, 0.1, 1, 5, 10, 100)))
+summary(tune.out)
+
+```
+
+We found that cost=1 has the lowest error rate, and is the best parameter to use.
+
+
+(c) Now repeat (b), this time using SVMs with radial and polynomial
+basis kernels, with different values of gamma and degree and
+cost. Comment on your results.
+
+```{r}
+
+#polynomial
+set.seed(123)
+tune.out <- tune(svm, mpg01 ~ ., data = Auto, kernel = "polynomial", 
+                 ranges = list(cost = c(0.1, 1, 10, 100, 1000),
+                 degree = c(2, 3, 4) ))
+summary(tune.out)
+
+```
+
+The best parameters from SVM with polynomial kernels are cost=1000 and degree=2.
+
+
+```{r}
+
+#radial
+set.seed(123)
+tune.out <- tune(svm, mpg01 ~ ., data = Auto, kernel = "radial", 
+                 ranges = list(cost = c(0.1, 1, 10, 100, 1000),
+                 gamma = c(0.5, 1, 2, 3, 4) ))
+summary(tune.out)
+
+```
+The best parameters from SVM with radial kernels are cost=1 and gamma=0.5.
+
+(d) Make some plots to back up your assertions in (b) and (c).
+Hint: In the lab, we used the plot() function for svm objects
+only in cases with p = 2. you can use the plot()
+function to create plots displaying pairs of variables at a time.
+Essentially, instead of typing 
+where svmfit contains your fitted model and dat is a data frame
+containing your data, you can type 
+in order to plot just the first and fourth variables. However, you
+must replace x1 and x4 with the correct variable names. 
+
+```{r}
+
+svm.linear <- svm(mpg01 ~ ., data = Auto, kernel = "linear", cost = 1)
+svm.polynomial <- svm(mpg01 ~ ., data = Auto, kernel = "polynomial", cost = 1000, degree = 2)
+svm.radial <- svm(mpg01 ~ ., data = Auto, kernel = "radial", cost = 1, gamma = 0.5)
+
+```
+
+
+```{r}
+
+#create a function to plot different variables
+plotpairs = function(fitted) {
+    for (name in names(Auto)[!(names(Auto) %in% c("mpg", "mpg01", "name"))]) {
+        plot(fitted, Auto, as.formula(paste("mpg~", name, sep = "")))
+    }
+}
+```
+
+
+```{r}
+plotpairs(svm.linear)
+```
+
+```{r}
+plotpairs(svm.polynomial)
+
+```
+
+```{r}
+plotpairs(svm.radial)
+```
+
+Indeed, the parameters from all SVMs produce accurate boundaries for the variables.
