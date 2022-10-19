@@ -1,0 +1,152 @@
+---
+title: "Project2"
+author: "Yiting Zhang"
+date: "2/13/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+
+
+
+# Clear all variables and prior sessions
+rm(list=ls(all=TRUE))
+
+# Load libraries
+library(fma)
+library(tseries)
+library(forecast)
+library(fpp3)
+library(tseries)
+library(seasonal)
+library(tsibble)
+library(dyn)
+library(ggplot2)
+library(Hmisc)
+library(latex2exp)
+library(lattice)
+library(foreign)
+library(MASS)
+library(car)
+require(stats)
+require(stats4)
+library(KernSmooth)
+library(fastICA)
+library(cluster)
+library(leaps)
+library(mgcv)
+library(rpart)
+library(pan)
+library(mgcv)
+library(DAAG)
+library("TTR")
+library(tis)
+require("datasets")
+require(graphics)
+library(xtable)
+library(stats)
+library(dyn)
+library(plotrix)
+library(strucchange)
+library(quantmod)
+```
+
+```{r}
+
+google =read.csv("GOOG_data.csv")
+
+fb =read.csv("FB_data.csv")
+
+return =read.csv("Return.csv")
+
+google <- google[-2450,]
+
+```
+
+```{r}
+
+ts_google <- ts(google$Adj.Close, start=c(2012,5),frequency=365)
+
+ts_fb <- ts(fb$Adj.Close, start=c(2012,5),frequency=365)
+
+```
+
+
+## j
+Compare your forecast from (i) to the 12-steps ahead forecasts from ARIMA, Holt-Winters,
+and ETS models. Which model performs best in terms of MAPE?
+
+
+## k
+Combine the four forecasts and comment on the MAPE from this forecasts vs., the individual
+ones.
+
+## l
+Fit an appropriate VAR model using your two variables. Make sure to show the relevant plots
+and discuss your results from the fit.
+
+According to the plot, returns of goodle and facebook all show smean reverting nature. 
+
+```{r}
+plot(ts_google)
+plot(ts_fb)
+```
+
+```{r}
+library(vars)
+
+VARselect(data.frame(ts_google, ts_fb))
+
+```
+
+The results from the VAR model shows the most significance for the lower lags and lags from 5-8. We need impulse response to have further analysis.
+```{r}
+
+model <- VAR(data.frame(ts_google, ts_fb), 9)
+summary(model)
+
+```
+
+
+## m
+Compute, plot, and interpret the respective impulse response functions.
+
+The impulse response from google shows a correlation of facebook with respect to the fluctuation of google, while opposite does not show a significant response of google to facebook. 
+
+```{r}
+
+plot(irf(model), plot.type = "multiple", names = "ts_google")
+
+plot(irf(model), plot.type = "multiple", names = "ts_fb")
+
+
+```
+
+## n
+Perform a Granger-Causality test on your variables and discuss your results from the test.
+
+The Granger test shows that facebook stock price is dependent on google while the converse is not true.
+
+```{r}
+# Picks order 9
+grangertest(ts_fb ~ ts_google, order = 9)
+
+grangertest(ts_google ~ ts_fb, order = 9)
+
+```
+
+## o
+Use your VAR model to forecast 12-steps ahead. Your forecast should include the respective
+error bands. Comment on the differences between the VAR forecast and the other ones
+obtained using the different methods.
+
+```{r}
+
+prd <- predict(model, n.ahead = 12, ci = 0.95, dumvar = NULL)
+print(prd)
+plot(prd)
+plot(prd, xlim=c(2400,2460))
+
+```
